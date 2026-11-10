@@ -1,5 +1,21 @@
 # AI 粗剪工作台
 
+## 小组作业：七维视频评测工作流
+
+**名称：** 七维视频评测（Dify 云端工作流）
+
+**功能：** 上传 MP4 视频，使用千问视觉模型按每秒两帧分析画面，使用 Paraformer 识别语音，再生成七维评分、画面观察、语音转写和修改建议。七个维度的满分分别为 20、20、15、15、10、10、10 分；证据不足的项目及不完整总分会显示“待评”。
+
+### 下载工作流
+
+1. 打开 [七维视频评测工作流文件](dify/video_review_qwen_2fps_cloud.yml)。
+2. 点击文件页面右上角的 **下载原始文件（Download raw file）** 图标，将 `.yml` 文件保存到电脑。也可以使用[直接下载链接](https://github.com/yubb6688-alt/ai-roughcut-demo/raw/refs/heads/main/dify/video_review_qwen_2fps_cloud.yml)。
+3. 若要在自己的 Dify 中运行，在 Dify 工作室选择导入工作流文件，然后配置环境变量 `BAILIAN_API_KEY`；所用百炼账号需能调用 Qwen3-VL-Plus 和 Paraformer-v2。文件不包含密钥，请勿把密钥提交到 GitHub。
+
+**无需配置的使用方式：** 向小组管理员索取已发布的云端评测网页链接，在网页上传视频并选择语音语言即可运行。网页由管理员的云端服务和百炼账号提供，使用会消耗该账号的可用额度；较大视频上传可能较慢。
+
+抽样分析可能遗漏画面，语音转写不能证明音质或事实；模型时间点、风险提示和评分都需要人工复核。模型调用可能产生费用。
+
 出海火车票短视频业务的 AI 粗剪流水线：输入选题 → DeepSeek 写脚本（3 版 + 规则审核）→ MiniMax 英文配音 → 从素材库配画面 → 国家/平台规则检查 → **生成真的剪映草稿** → 草稿检查 → 人工换镜头、在剪映里精修。
 
 在线查看一次真实运行的回放：https://ethan17461.github.io/ai-roughcut-demo/
@@ -17,14 +33,6 @@
 本地工作台（能输入选题现场生成）：先安装 `requirements.txt` 中的依赖，在 `.env` 里填 DeepSeek 和 MiniMax 的 key；成片评测需要 `DEEPSEEK_API_KEY`。运行 `.venv/bin/python studio.py`，打开 http://localhost:8770 。如果端口被占用，可运行 `PORT=18770 .venv/bin/python studio.py`，改为打开 http://localhost:18770 。不要把密钥发给他人或提交到仓库。
 
 素材来自 Pexels（免费可商用，共 53 段）；选题池的历史数据为示例数据；剪映草稿由开源库 [pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft) 生成。
-
-## 小组共用 Dify 视频评测
-
-管理员可私下分享已发布的云端评测入口，组员在网页中上传视频并选择语音语言即可使用。GitHub 保存工作流文件；实际运行由 Dify 云端及阿里云百炼提供。
-
-需要自行部署时，从 [七维视频评测工作流](dify/video_review_qwen_2fps_cloud.yml) 导入 Dify，然后在环境变量中配置自己的 `BAILIAN_API_KEY`。工作流不包含密钥，使用的百炼账号需能调用 Qwen3-VL-Plus 和 Paraformer-v2；使用可能消耗额度或产生费用。
-
-工作流按每秒两帧分析画面并识别音轨，七个维度按 20、20、15、15、10、10、10 分设置，总计 100 分。报告对有依据的项目给出 AI 初评，证据不足的项目和不完整总分标为待评。抽样可能遗漏画面，语音转写无法证明音质或事实，时间点与风险提示均需人工复核。
 
 ## 在自己电脑上继续改
 
