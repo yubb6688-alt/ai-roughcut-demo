@@ -1,5 +1,7 @@
 # Dify 七维视频评测工作流
 
+> 请先阅读 [组员下载说明](组员下载说明.md)，了解云端导出版、全帧服务状态和各旧版文件用途。以下内容介绍旧版工作流。
+
 这里有两个版本，评分都使用七维 100 分：
 
 - [云端版 team_video_review_cloud.yml](team_video_review_cloud.yml)：在 Dify 云端读取视频画面、转写实际音轨，再由 DeepSeek 按证据初评。

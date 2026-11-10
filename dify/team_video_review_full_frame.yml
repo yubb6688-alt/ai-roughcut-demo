@@ -1,0 +1,1002 @@
+app:
+  description: 调用外部全帧服务的异步工作流；服务需要单独部署和验证。
+  icon: 🎞️
+  icon_background: '#FFEAD5'
+  icon_type: emoji
+  mode: workflow
+  name: 视频七维评测（云端全帧服务）
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables:
+  - id: 028fc9a6-d154-5139-b1f0-b0bd65094a80
+    name: FULL_FRAME_BASE_URL
+    value_type: string
+    value: ''
+    description: 管理员填写已部署的 HTTPS 服务根地址，或以 /api 结尾的地址。
+  - id: 01ff520e-72fc-52ed-b4ed-7797b50027a2
+    name: FULL_FRAME_API_KEY
+    value_type: secret
+    value: ''
+    description: 服务鉴权密钥；请在 Dify 内填写，导出工作流前留空。
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: 输入视频、脚本与规则
+        type: start
+        variables:
+        - allowed_file_extensions: []
+          allowed_file_types:
+          - video
+          allowed_file_upload_methods:
+          - local_file
+          label: 视频
+          required: true
+          type: file
+          variable: video
+        - label: 视频脚本
+          max_length: 10000
+          required: false
+          type: paragraph
+          variable: script
+        - default: 检测视频各帧中可识别的人脸、国旗以及疑似品牌标识。发现疑似风险时应转人工；竞品身份无法确认时不得假称已确认。
+          label: 评测规则（每行一条）
+          max_length: 10000
+          required: false
+          type: paragraph
+          variable: rules
+        - label: 语音语言
+          options:
+          - en-US
+          - zh-CN
+          required: false
+          type: select
+          variable: asr_language
+      height: 213
+      id: start
+      position: &id001
+        x: 20
+        y: 300
+      positionAbsolute: *id001
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - id: prepare
+      data:
+        desc: ''
+        selected: false
+        title: 准备全帧任务
+        type: code
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node helpers for the external async full-frame job contract.\"\"\"\nimport json\n\
+          import math\nimport re\nfrom urllib.parse import urlsplit\n\n\ndef _obj(value):\n    try:\n        obj\
+          \ = json.loads(value)\n        return obj if isinstance(obj, dict) else {}\n    except (ValueError, TypeError):\n\
+          \        return {}\n\n\ndef prepare(video_url: str, script: str, rules: str, language: str, base_url:\
+          \ str) -> dict:\n    invalid = {'ready': 0, 'submit_url': '', 'base_url': '', 'body': '{}'}\n    try:\n\
+          \        base = urlsplit(base_url.rstrip('/'))\n        media = urlsplit(video_url)\n        if (base.scheme\
+          \ != 'https' or not base.hostname or base.username or base.password\n                or base.port not\
+          \ in (None, 443) or base.query or base.fragment or base.path not in ('', '/api')\n                or media.scheme\
+          \ != 'https' or not media.hostname or media.username or media.password or media.fragment):\n         \
+          \   return invalid\n        base_path = 'https://' + base.netloc + (base.path or '')\n        body = {'video_url':\
+          \ video_url, 'script': script or '', 'rules': rules or '', 'language': language or 'en-US'}\n        return\
+          \ {'ready': 1, 'submit_url': base_path + '/jobs', 'base_url': base_path,\n                'body': json.dumps(body,\
+          \ ensure_ascii=False)}\n    except (ValueError, TypeError, AttributeError):\n        return invalid\n\n\
+          \ndef parse_submit(body: str, status: int, base_url: str) -> dict:\n    invalid = {'ready': 0, 'poll_url':\
+          \ ''}\n    data = _obj(body)\n    job_id = data.get('job_id')\n    if status not in (200, 201, 202) or\
+          \ not isinstance(job_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', job_id):\n        return invalid\n\
+          \    return {'ready': 1, 'poll_url': base_url + '/jobs/' + job_id}\n\n\ndef parse_poll(body: str, status:\
+          \ int) -> dict:\n    failed = {'done': 1, 'report': '检测任务失败或返回数据无效，请稍后重试；本次不生成评分。'}\n    data = _obj(body)\n\
+          \    if status != 200:\n        return failed\n    state = data.get('status')\n    if state in ('pending',\
+          \ 'running'):\n        return {'done': 0, 'report': ''}\n    result = data.get('result')\n    if state\
+          \ != 'succeeded' or not isinstance(result, dict):\n        return failed\n    report = result.get('report')\n\
+          \    verdict = result.get('verdict')\n    total = result.get('total')\n    if (not isinstance(report,\
+          \ str) or not report.strip() or len(report) > 100000\n            or verdict not in ('通过', '转人工') or type(result.get('coverage_complete'))\
+          \ is not bool\n            or (verdict == '通过' and (result['coverage_complete'] is not True\n        \
+          \        or type(total) not in (int, float) or not math.isfinite(total) or not 80 <= total <= 100))):\n\
+          \        return failed\n    return {'done': 1, 'report': report}\n\n\ndef output(done: int, report: str)\
+          \ -> dict:\n    if done == 1 and isinstance(report, str) and report.strip():\n        return {'report':\
+          \ report}\n    return {'report': '检测任务仍在处理中或已超时，本次不生成评分；请联系服务管理员查询任务状态。'}\n\nmain = prepare\n"
+        variables:
+        - variable: video_url
+          value_selector:
+          - start
+          - video
+          - url
+          value_type: string
+        - variable: script
+          value_selector:
+          - start
+          - script
+          value_type: string
+        - variable: rules
+          value_selector:
+          - start
+          - rules
+          value_type: string
+        - variable: language
+          value_selector:
+          - start
+          - asr_language
+          value_type: string
+        - variable: base_url
+          value_selector:
+          - env
+          - FULL_FRAME_BASE_URL
+          value_type: string
+        outputs:
+          ready:
+            type: number
+            children: null
+          submit_url:
+            type: string
+            children: null
+          base_url:
+            type: string
+            children: null
+          body:
+            type: string
+            children: null
+      position:
+        x: 340
+        y: 300
+      positionAbsolute:
+        x: 340
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: configured
+      data:
+        desc: ''
+        selected: false
+        title: 服务地址有效
+        type: if-else
+        cases:
+        - case_id: 'true'
+          id: 'true'
+          logical_operator: and
+          conditions:
+          - id: f6af56d5-69d9-5712-8248-33e7b4319f1e
+            comparison_operator: '='
+            value: '1'
+            varType: number
+            variable_selector:
+            - prepare
+            - ready
+      position:
+        x: 660
+        y: 300
+      positionAbsolute:
+        x: 660
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: submit
+      data:
+        desc: ''
+        selected: false
+        title: 提交全帧任务
+        type: http-request
+        authorization:
+          type: no-auth
+        body:
+          type: json
+          data:
+          - id: ae0f49d5-0318-540e-add0-8d8858dad9ec
+            key: ''
+            type: text
+            value: '{{#prepare.body#}}'
+        default_value:
+        - key: body
+          type: string
+          value: ''
+        - key: status_code
+          type: number
+          value: '0'
+        error_strategy: default-value
+        headers: 'Authorization: Bearer {{#env.FULL_FRAME_API_KEY#}}
+
+          Content-Type: application/json'
+        method: post
+        params: ''
+        retry_config:
+          enabled: false
+          max_retries: 1
+          retry_interval: 1000
+        ssl_verify: true
+        timeout:
+          connect: 10
+          read: 30
+          write: 30
+        url: '{{#prepare.submit_url#}}'
+      position:
+        x: 980
+        y: 300
+      positionAbsolute:
+        x: 980
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: submitted
+      data:
+        desc: ''
+        selected: false
+        title: 校验任务编号
+        type: code
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node helpers for the external async full-frame job contract.\"\"\"\nimport json\n\
+          import math\nimport re\nfrom urllib.parse import urlsplit\n\n\ndef _obj(value):\n    try:\n        obj\
+          \ = json.loads(value)\n        return obj if isinstance(obj, dict) else {}\n    except (ValueError, TypeError):\n\
+          \        return {}\n\n\ndef prepare(video_url: str, script: str, rules: str, language: str, base_url:\
+          \ str) -> dict:\n    invalid = {'ready': 0, 'submit_url': '', 'base_url': '', 'body': '{}'}\n    try:\n\
+          \        base = urlsplit(base_url.rstrip('/'))\n        media = urlsplit(video_url)\n        if (base.scheme\
+          \ != 'https' or not base.hostname or base.username or base.password\n                or base.port not\
+          \ in (None, 443) or base.query or base.fragment or base.path not in ('', '/api')\n                or media.scheme\
+          \ != 'https' or not media.hostname or media.username or media.password or media.fragment):\n         \
+          \   return invalid\n        base_path = 'https://' + base.netloc + (base.path or '')\n        body = {'video_url':\
+          \ video_url, 'script': script or '', 'rules': rules or '', 'language': language or 'en-US'}\n        return\
+          \ {'ready': 1, 'submit_url': base_path + '/jobs', 'base_url': base_path,\n                'body': json.dumps(body,\
+          \ ensure_ascii=False)}\n    except (ValueError, TypeError, AttributeError):\n        return invalid\n\n\
+          \ndef parse_submit(body: str, status: int, base_url: str) -> dict:\n    invalid = {'ready': 0, 'poll_url':\
+          \ ''}\n    data = _obj(body)\n    job_id = data.get('job_id')\n    if status not in (200, 201, 202) or\
+          \ not isinstance(job_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', job_id):\n        return invalid\n\
+          \    return {'ready': 1, 'poll_url': base_url + '/jobs/' + job_id}\n\n\ndef parse_poll(body: str, status:\
+          \ int) -> dict:\n    failed = {'done': 1, 'report': '检测任务失败或返回数据无效，请稍后重试；本次不生成评分。'}\n    data = _obj(body)\n\
+          \    if status != 200:\n        return failed\n    state = data.get('status')\n    if state in ('pending',\
+          \ 'running'):\n        return {'done': 0, 'report': ''}\n    result = data.get('result')\n    if state\
+          \ != 'succeeded' or not isinstance(result, dict):\n        return failed\n    report = result.get('report')\n\
+          \    verdict = result.get('verdict')\n    total = result.get('total')\n    if (not isinstance(report,\
+          \ str) or not report.strip() or len(report) > 100000\n            or verdict not in ('通过', '转人工') or type(result.get('coverage_complete'))\
+          \ is not bool\n            or (verdict == '通过' and (result['coverage_complete'] is not True\n        \
+          \        or type(total) not in (int, float) or not math.isfinite(total) or not 80 <= total <= 100))):\n\
+          \        return failed\n    return {'done': 1, 'report': report}\n\n\ndef output(done: int, report: str)\
+          \ -> dict:\n    if done == 1 and isinstance(report, str) and report.strip():\n        return {'report':\
+          \ report}\n    return {'report': '检测任务仍在处理中或已超时，本次不生成评分；请联系服务管理员查询任务状态。'}\n\nmain = parse_submit\n"
+        variables:
+        - variable: body
+          value_selector:
+          - submit
+          - body
+          value_type: string
+        - variable: status
+          value_selector:
+          - submit
+          - status_code
+          value_type: number
+        - variable: base_url
+          value_selector:
+          - prepare
+          - base_url
+          value_type: string
+        outputs:
+          ready:
+            type: number
+            children: null
+          poll_url:
+            type: string
+            children: null
+      position:
+        x: 1300
+        y: 300
+      positionAbsolute:
+        x: 1300
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: accepted
+      data:
+        desc: ''
+        selected: false
+        title: 任务已受理
+        type: if-else
+        cases:
+        - case_id: 'true'
+          id: 'true'
+          logical_operator: and
+          conditions:
+          - id: 2fca8a32-0b27-5823-85ca-9896efc19b60
+            comparison_operator: '='
+            value: '1'
+            varType: number
+            variable_selector:
+            - submitted
+            - ready
+      position:
+        x: 1620
+        y: 300
+      positionAbsolute:
+        x: 1620
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: loop
+      data:
+        desc: ''
+        selected: false
+        title: 等待全帧服务（最多100次，每次10秒）
+        type: loop
+        break_conditions:
+        - id: edecb8e9-e83a-5987-8878-e728d1c4dd28
+          comparison_operator: ≥
+          value: '1'
+          varType: number
+          variable_selector:
+          - loop
+          - done
+        logical_operator: and
+        loop_count: 100
+        start_node_id: loopstart
+        loop_variables:
+        - id: edecb8e9-e83a-5987-8878-e728d1c4dd28
+          label: done
+          value: '0'
+          value_type: constant
+          var_type: number
+        - id: 999deff8-f49b-5607-b248-d61bbe064800
+          label: report
+          value: ''
+          value_type: constant
+          var_type: string
+        width: 1400
+        height: 330
+      position:
+        x: 1940
+        y: 300
+      positionAbsolute:
+        x: 1940
+        y: 300
+      height: 330
+      width: 1400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 1
+    - id: loopstart
+      data:
+        desc: ''
+        selected: false
+        title: ''
+        type: loop-start
+        isInIteration: false
+        isInLoop: true
+        loop_id: loop
+      position:
+        x: 40
+        y: 120
+      positionAbsolute:
+        x: 1980
+        y: 420
+      height: 48
+      width: 44
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom-loop-start
+      zIndex: 1002
+      parentId: loop
+      draggable: false
+      selectable: false
+    - id: pause
+      data:
+        desc: ''
+        selected: false
+        title: 等待10秒
+        type: code
+        code_language: python3
+        code: "import time\n\ndef main() -> dict:\n    time.sleep(10)\n    return {\"ready\": 1}\n"
+        variables: []
+        outputs:
+          ready:
+            type: number
+            children: null
+        isInIteration: false
+        isInLoop: true
+        loop_id: loop
+      position:
+        x: 120
+        y: 120
+      positionAbsolute:
+        x: 2060
+        y: 420
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 1002
+      parentId: loop
+    - id: poll
+      data:
+        desc: ''
+        selected: false
+        title: 查询任务状态
+        type: http-request
+        authorization:
+          type: no-auth
+        body:
+          type: none
+          data: []
+        default_value:
+        - key: body
+          type: string
+          value: ''
+        - key: status_code
+          type: number
+          value: '0'
+        error_strategy: default-value
+        headers: 'Authorization: Bearer {{#env.FULL_FRAME_API_KEY#}}'
+        method: get
+        params: ''
+        retry_config:
+          enabled: false
+          max_retries: 1
+          retry_interval: 1000
+        ssl_verify: true
+        timeout:
+          connect: 10
+          read: 30
+          write: 30
+        url: '{{#submitted.poll_url#}}'
+        isInIteration: false
+        isInLoop: true
+        loop_id: loop
+      position:
+        x: 420
+        y: 120
+      positionAbsolute:
+        x: 2360
+        y: 420
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 1002
+      parentId: loop
+    - id: poll_parse
+      data:
+        desc: ''
+        selected: false
+        title: 校验服务结果
+        type: code
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node helpers for the external async full-frame job contract.\"\"\"\nimport json\n\
+          import math\nimport re\nfrom urllib.parse import urlsplit\n\n\ndef _obj(value):\n    try:\n        obj\
+          \ = json.loads(value)\n        return obj if isinstance(obj, dict) else {}\n    except (ValueError, TypeError):\n\
+          \        return {}\n\n\ndef prepare(video_url: str, script: str, rules: str, language: str, base_url:\
+          \ str) -> dict:\n    invalid = {'ready': 0, 'submit_url': '', 'base_url': '', 'body': '{}'}\n    try:\n\
+          \        base = urlsplit(base_url.rstrip('/'))\n        media = urlsplit(video_url)\n        if (base.scheme\
+          \ != 'https' or not base.hostname or base.username or base.password\n                or base.port not\
+          \ in (None, 443) or base.query or base.fragment or base.path not in ('', '/api')\n                or media.scheme\
+          \ != 'https' or not media.hostname or media.username or media.password or media.fragment):\n         \
+          \   return invalid\n        base_path = 'https://' + base.netloc + (base.path or '')\n        body = {'video_url':\
+          \ video_url, 'script': script or '', 'rules': rules or '', 'language': language or 'en-US'}\n        return\
+          \ {'ready': 1, 'submit_url': base_path + '/jobs', 'base_url': base_path,\n                'body': json.dumps(body,\
+          \ ensure_ascii=False)}\n    except (ValueError, TypeError, AttributeError):\n        return invalid\n\n\
+          \ndef parse_submit(body: str, status: int, base_url: str) -> dict:\n    invalid = {'ready': 0, 'poll_url':\
+          \ ''}\n    data = _obj(body)\n    job_id = data.get('job_id')\n    if status not in (200, 201, 202) or\
+          \ not isinstance(job_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', job_id):\n        return invalid\n\
+          \    return {'ready': 1, 'poll_url': base_url + '/jobs/' + job_id}\n\n\ndef parse_poll(body: str, status:\
+          \ int) -> dict:\n    failed = {'done': 1, 'report': '检测任务失败或返回数据无效，请稍后重试；本次不生成评分。'}\n    data = _obj(body)\n\
+          \    if status != 200:\n        return failed\n    state = data.get('status')\n    if state in ('pending',\
+          \ 'running'):\n        return {'done': 0, 'report': ''}\n    result = data.get('result')\n    if state\
+          \ != 'succeeded' or not isinstance(result, dict):\n        return failed\n    report = result.get('report')\n\
+          \    verdict = result.get('verdict')\n    total = result.get('total')\n    if (not isinstance(report,\
+          \ str) or not report.strip() or len(report) > 100000\n            or verdict not in ('通过', '转人工') or type(result.get('coverage_complete'))\
+          \ is not bool\n            or (verdict == '通过' and (result['coverage_complete'] is not True\n        \
+          \        or type(total) not in (int, float) or not math.isfinite(total) or not 80 <= total <= 100))):\n\
+          \        return failed\n    return {'done': 1, 'report': report}\n\n\ndef output(done: int, report: str)\
+          \ -> dict:\n    if done == 1 and isinstance(report, str) and report.strip():\n        return {'report':\
+          \ report}\n    return {'report': '检测任务仍在处理中或已超时，本次不生成评分；请联系服务管理员查询任务状态。'}\n\nmain = parse_poll\n"
+        variables:
+        - variable: body
+          value_selector:
+          - poll
+          - body
+          value_type: string
+        - variable: status
+          value_selector:
+          - poll
+          - status_code
+          value_type: number
+        outputs:
+          done:
+            type: number
+            children: null
+          report:
+            type: string
+            children: null
+        isInIteration: false
+        isInLoop: true
+        loop_id: loop
+      position:
+        x: 730
+        y: 120
+      positionAbsolute:
+        x: 2670
+        y: 420
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 1002
+      parentId: loop
+    - id: assign
+      data:
+        desc: ''
+        selected: false
+        title: 保存任务状态
+        type: assigner
+        version: '2'
+        items:
+        - input_type: variable
+          operation: over-write
+          write_mode: over-write
+          value:
+          - poll_parse
+          - done
+          variable_selector:
+          - loop
+          - done
+        - input_type: variable
+          operation: over-write
+          write_mode: over-write
+          value:
+          - poll_parse
+          - report
+          variable_selector:
+          - loop
+          - report
+        isInIteration: false
+        isInLoop: true
+        loop_id: loop
+      position:
+        x: 1040
+        y: 120
+      positionAbsolute:
+        x: 2980
+        y: 420
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 1002
+      parentId: loop
+    - id: done
+      data:
+        desc: ''
+        selected: false
+        title: 输出处理结果
+        type: code
+        code_language: python3
+        code: "\"\"\"Pure Dify code-node helpers for the external async full-frame job contract.\"\"\"\nimport json\n\
+          import math\nimport re\nfrom urllib.parse import urlsplit\n\n\ndef _obj(value):\n    try:\n        obj\
+          \ = json.loads(value)\n        return obj if isinstance(obj, dict) else {}\n    except (ValueError, TypeError):\n\
+          \        return {}\n\n\ndef prepare(video_url: str, script: str, rules: str, language: str, base_url:\
+          \ str) -> dict:\n    invalid = {'ready': 0, 'submit_url': '', 'base_url': '', 'body': '{}'}\n    try:\n\
+          \        base = urlsplit(base_url.rstrip('/'))\n        media = urlsplit(video_url)\n        if (base.scheme\
+          \ != 'https' or not base.hostname or base.username or base.password\n                or base.port not\
+          \ in (None, 443) or base.query or base.fragment or base.path not in ('', '/api')\n                or media.scheme\
+          \ != 'https' or not media.hostname or media.username or media.password or media.fragment):\n         \
+          \   return invalid\n        base_path = 'https://' + base.netloc + (base.path or '')\n        body = {'video_url':\
+          \ video_url, 'script': script or '', 'rules': rules or '', 'language': language or 'en-US'}\n        return\
+          \ {'ready': 1, 'submit_url': base_path + '/jobs', 'base_url': base_path,\n                'body': json.dumps(body,\
+          \ ensure_ascii=False)}\n    except (ValueError, TypeError, AttributeError):\n        return invalid\n\n\
+          \ndef parse_submit(body: str, status: int, base_url: str) -> dict:\n    invalid = {'ready': 0, 'poll_url':\
+          \ ''}\n    data = _obj(body)\n    job_id = data.get('job_id')\n    if status not in (200, 201, 202) or\
+          \ not isinstance(job_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', job_id):\n        return invalid\n\
+          \    return {'ready': 1, 'poll_url': base_url + '/jobs/' + job_id}\n\n\ndef parse_poll(body: str, status:\
+          \ int) -> dict:\n    failed = {'done': 1, 'report': '检测任务失败或返回数据无效，请稍后重试；本次不生成评分。'}\n    data = _obj(body)\n\
+          \    if status != 200:\n        return failed\n    state = data.get('status')\n    if state in ('pending',\
+          \ 'running'):\n        return {'done': 0, 'report': ''}\n    result = data.get('result')\n    if state\
+          \ != 'succeeded' or not isinstance(result, dict):\n        return failed\n    report = result.get('report')\n\
+          \    verdict = result.get('verdict')\n    total = result.get('total')\n    if (not isinstance(report,\
+          \ str) or not report.strip() or len(report) > 100000\n            or verdict not in ('通过', '转人工') or type(result.get('coverage_complete'))\
+          \ is not bool\n            or (verdict == '通过' and (result['coverage_complete'] is not True\n        \
+          \        or type(total) not in (int, float) or not math.isfinite(total) or not 80 <= total <= 100))):\n\
+          \        return failed\n    return {'done': 1, 'report': report}\n\n\ndef output(done: int, report: str)\
+          \ -> dict:\n    if done == 1 and isinstance(report, str) and report.strip():\n        return {'report':\
+          \ report}\n    return {'report': '检测任务仍在处理中或已超时，本次不生成评分；请联系服务管理员查询任务状态。'}\n\nmain = output\n"
+        variables:
+        - variable: done
+          value_selector:
+          - loop
+          - done
+          value_type: number
+        - variable: report
+          value_selector:
+          - loop
+          - report
+          value_type: string
+        outputs:
+          report:
+            type: string
+            children: null
+      position:
+        x: 3460
+        y: 300
+      positionAbsolute:
+        x: 3460
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: unconfigured
+      data:
+        desc: ''
+        selected: false
+        title: 服务不可用
+        type: code
+        code_language: python3
+        code: "def main() -> dict:\n    return {\"report\": \"全帧服务未配置或任务提交失败，本次不生成评分。\"}\n"
+        variables: []
+        outputs:
+          report:
+            type: string
+            children: null
+      position:
+        x: 980
+        y: 760
+      positionAbsolute:
+        x: 980
+        y: 760
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: rejected
+      data:
+        desc: ''
+        selected: false
+        title: 服务不可用
+        type: code
+        code_language: python3
+        code: "def main() -> dict:\n    return {\"report\": \"全帧服务未配置或任务提交失败，本次不生成评分。\"}\n"
+        variables: []
+        outputs:
+          report:
+            type: string
+            children: null
+      position:
+        x: 1940
+        y: 760
+      positionAbsolute:
+        x: 1940
+        y: 760
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - id: aggregate
+      data:
+        desc: ''
+        selected: false
+        title: 汇总结果
+        type: variable-aggregator
+        advanced_settings:
+          group_enabled: false
+          groups: []
+        output_type: string
+        variables:
+        - - done
+          - report
+        - - unconfigured
+          - report
+        - - rejected
+          - report
+      position:
+        x: 3780
+        y: 300
+      positionAbsolute:
+        x: 3780
+        y: 300
+      height: 120
+      width: 244
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      zIndex: 0
+    - data:
+        desc: ''
+        outputs:
+        - variable: report
+          value_type: string
+          value_selector:
+          - aggregate
+          - output
+        selected: false
+        title: 输出评测报告
+        type: end
+      height: 114
+      id: end
+      position: &id002
+        x: 4100
+        y: 300
+      positionAbsolute: *id002
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    edges:
+    - id: start-source-prepare
+      source: start
+      sourceHandle: source
+      target: prepare
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: code
+      zIndex: 0
+    - id: prepare-source-configured
+      source: prepare
+      sourceHandle: source
+      target: configured
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: if-else
+      zIndex: 0
+    - id: submit-source-submitted
+      source: submit
+      sourceHandle: source
+      target: submitted
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: code
+      zIndex: 0
+    - id: submitted-source-accepted
+      source: submitted
+      sourceHandle: source
+      target: accepted
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: if-else
+      zIndex: 0
+    - id: loop-source-done
+      source: loop
+      sourceHandle: source
+      target: done
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: loop
+        targetType: code
+      zIndex: 0
+    - id: done-source-aggregate
+      source: done
+      sourceHandle: source
+      target: aggregate
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: variable-aggregator
+      zIndex: 0
+    - id: unconfigured-source-aggregate
+      source: unconfigured
+      sourceHandle: source
+      target: aggregate
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: variable-aggregator
+      zIndex: 0
+    - id: rejected-source-aggregate
+      source: rejected
+      sourceHandle: source
+      target: aggregate
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: variable-aggregator
+      zIndex: 0
+    - id: aggregate-source-end
+      source: aggregate
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: variable-aggregator
+        targetType: end
+      zIndex: 0
+    - id: configured-true-submit
+      source: configured
+      sourceHandle: 'true'
+      target: submit
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: http-request
+      zIndex: 0
+    - id: configured-false-unconfigured
+      source: configured
+      sourceHandle: 'false'
+      target: unconfigured
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: code
+      zIndex: 0
+    - id: accepted-true-loop
+      source: accepted
+      sourceHandle: 'true'
+      target: loop
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: loop
+      zIndex: 0
+    - id: accepted-false-rejected
+      source: accepted
+      sourceHandle: 'false'
+      target: rejected
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: if-else
+        targetType: code
+      zIndex: 0
+    - id: loopstart-source-pause
+      source: loopstart
+      sourceHandle: source
+      target: pause
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: true
+        sourceType: loop-start
+        targetType: code
+        loop_id: loop
+      zIndex: 1002
+    - id: pause-source-poll
+      source: pause
+      sourceHandle: source
+      target: poll
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: true
+        sourceType: code
+        targetType: http-request
+        loop_id: loop
+      zIndex: 1002
+    - id: poll-source-poll_parse
+      source: poll
+      sourceHandle: source
+      target: poll_parse
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: true
+        sourceType: http-request
+        targetType: code
+        loop_id: loop
+      zIndex: 1002
+    - id: poll_parse-source-assign
+      source: poll_parse
+      sourceHandle: source
+      target: assign
+      targetHandle: target
+      type: custom
+      data:
+        isInIteration: false
+        isInLoop: true
+        sourceType: code
+        targetType: assigner
+        loop_id: loop
+      zIndex: 1002
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.45
+  rag_pipeline_variables: []
